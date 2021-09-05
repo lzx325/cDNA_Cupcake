@@ -37,7 +37,9 @@ class BranchSimple:
         self.max_3_diff = max_3_diff
 
         self.transfrag_filename = transfrag_filename
-        self.transfrag_len_dict = dict((r.id.split()[0], len(r.seq)) for r in SeqIO.parse(open(transfrag_filename), 'fastq' if is_fq else 'fasta'))
+        self.transfrag_len_dict = None
+        if self.transfrag_filename is not None:
+            self.transfrag_len_dict = dict((r.id.split()[0], len(r.seq)) for r in SeqIO.parse(open(transfrag_filename), 'fastq' if is_fq else 'fasta'))
 
         self.cov_threshold = cov_threshold # only output GTF records if >= this many GMAP records support it (this must be if I'm running non-clustered fasta on GMAP)
 
@@ -47,11 +49,13 @@ class BranchSimple:
         self.cuff_index = 1
 
 
-    def iter_gmap_sam(self, gmap_sam_filename, ignored_fout):
+    def iter_gmap_sam(self, aligned_sam_bam_filename, ignored_fout, type='SAM', bam_start_index=None, bam_end_index=None):
         """
         Iterate over a SORTED GMAP SAM file.
         Return a collection of records that overlap by at least 1 base.
         """
+        assert type in ('SAM', 'BAM')
+
         def sep_by_clustertree(records):
             tree = ClusterTree(0,0)
             for i,r in enumerate(records): tree.insert(r.sStart, r.sEnd, i)
@@ -73,15 +77,21 @@ class BranchSimple:
             output['-'] = sep_by_clustertree(output['-'])
             return output
 
-        gmap_sam_reader = BioReaders.GMAPSAMReader(gmap_sam_filename, True, query_len_dict=self.transfrag_len_dict)
-        quality_alignments = self.get_quality_alignments(gmap_sam_reader, ignored_fout)
+        if type == 'SAM':
+            aligned_reader = BioReaders.GMAPSAMReader(aligned_sam_bam_filename, has_header=True, query_len_dict=self.transfrag_len_dict)
+        else:
+            if bam_start_index is None:
+                aligned_reader = BioReaders.SplicedBAMReader(aligned_sam_bam_filename, query_len_dict=self.transfrag_len_dict)
+            else:
+                aligned_reader = BioReaders.SplicedBAMReaderRegioned(aligned_sam_bam_filename, bam_start_index, bam_end_index, query_len_dict=self.transfrag_len_dict)
+        quality_alignments = self.get_quality_alignments(aligned_reader, ignored_fout)
 
         # find first acceptably mapped read
         try:
             records = [next(quality_alignments)]
             max_end = records[0].sEnd
         except StopIteration:
-            print("No valid records from {0}!".format(gmap_sam_filename), file=sys.stderr)
+            print("No valid records from {0}!".format(aligned_sam_bam_filename), file=sys.stderr)
             return
         # go through remainder of alignments and group by subject ID
         for r in quality_alignments:
@@ -97,15 +107,15 @@ class BranchSimple:
                 max_end = max(max_end, r.sEnd)
         yield sep_by_strand(records)
 
-    def get_quality_alignments(self, gmap_sam_reader, ignored_fout):
+    def get_quality_alignments(self, aligned_reader, ignored_fout):
         """
-        Exclude SAM alignments that
+        Exclude SAM/BAM alignments that
         (1) fail minimum coverage
         (2) fail minimum identity
         (3) unmapped
         (4) has 0-bp exons (damn you minimap2)
         """
-        for r in gmap_sam_reader:
+        for r in aligned_reader:
             if r.sID == '*':
                 ignored_fout.write("{0}\tUnmapped.\n".format(r.qID))
             elif r.qCoverage < self.min_aln_coverage:
@@ -306,10 +316,13 @@ class BranchSimple:
                 f_out = f_good
             self.isoform_index += 1
             segments = [node_d[x] for x in m.nonzero()[1]]
+            #if self.cuff_index==321 and self.isoform_index>=45: pdb.set_trace()
             f_group.write("{p}.{i}.{j}\t{ids}\n".format(ids=ids, i=self.cuff_index, j=self.isoform_index, p=gene_prefix))
+            # DEBUG
+            #print("DEBUG: I just wrote to {x}--{p}.{i}.{j}\t{ids}".format(x=f_group.name,ids=ids, i=self.cuff_index, j=self.isoform_index, p=gene_prefix))
             f_out.write("{chr}\tPacBio\ttranscript\t{s}\t{e}\t.\t{strand}\t.\tgene_id \"{p}.{i}\"; transcript_id \"{p}.{i}.{j}\";\n".format(\
                 chr=self.chrom, s=segments[0].start+1, e=segments[-1].end, i=self.cuff_index, p=gene_prefix, j=self.isoform_index, strand=self.strand))
-
+            #print("DEBUG: I just wrote to {x} gff {p}.{i}.{j}".format(x=f_out.name, i=self.cuff_index, p=gene_prefix, j=self.isoform_index))
             i = 0
             j = 0
             for j in range(1, len(segments)):
@@ -321,6 +334,8 @@ class BranchSimple:
                     chr=self.chrom, s=segments[i].start+1, e=segments[j].end, p=gene_prefix, i=self.cuff_index, j=self.isoform_index, strand=self.strand))
 
         self.cuff_index += 1
+        f_group.flush()
+        f_out.flush()
 
         return result, result_merged
 

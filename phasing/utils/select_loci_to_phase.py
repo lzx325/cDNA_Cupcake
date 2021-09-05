@@ -1,5 +1,5 @@
 __author__ = "etseng@pacb.com"
-
+import pdb
 """
 For Iso-Phase, selecting loci that has sufficient FL coverage to phase.
 
@@ -15,38 +15,37 @@ from collections import defaultdict
 from csv import DictReader
 from Bio import SeqIO
 from bx.intervals.cluster import ClusterTree
-from cupcake.io.SeqReaders import LazyFastqReader
+from cupcake.io.SeqReaders import LazyFastqReader, LazyFastaReader
 from cupcake.io.GFF import collapseGFFReader
 
 rex_flnc = re.compile('(m\S+_\d+_\d+\/\d+)\/ccs') # Sequel/Iso-Seq 3 format
-rex_flnc2 = re.compile('(m\d+_\d+_\d+_\w+_s1_p0\/\d+)\/ccs') # ex: m160920_210440_42165_c101101052550000001823258304261787_s1_p0/83826/ccs
-rex_flnc3 = re.compile('(m\d+_\d+_\d+_\w+_s1_p0\/\d+)\/\d+_\d+_CCS') # ex: m160918_184656_42165_c101101052550000001823258304261782_s1_p0/121477/5106_57_CCS
-rex_pbid = re.compile('(PB.\d+).\d+')
+rex_pbid = re.compile('(PB[fusion]?.\d+)[.\d+]?')  # this will handle both PB.X.Y and PBfusion.X
 
 
 extra_bp_around_junctions = 50 # get this much around junctions to be safe AND to not screw up GMAP who doesn't like microintrons....
 __padding_before_after__ = 10 # get this much before and after the start
 
 
-def read_flnc_fastq(flnc_filename):
+def read_flnc_fafq(flnc_filename, fq_or_fa='fastq'):
     """
     Read FLNC fastq into a dict of zmw --> lazy file pointer
     """
-    flnc_fastq_d = LazyFastqReader(flnc_filename)
+    if fq_or_fa=='fastq':
+        flnc_fafq_d = LazyFastqReader(flnc_filename)
+    else:
+        flnc_fafq_d = LazyFastaReader(flnc_filename)
     rich_zmws = set()
 
-    for k in list(flnc_fastq_d.keys()):
+    for k in list(flnc_fafq_d.keys()):
         m = rex_flnc.match(k)
-        if m is None:
-            m = rex_flnc2.match(k)
-            if m is None:
-                m = rex_flnc3.match(k)
-                if m is None: raise Exception("Expected FLNC id format is <movie>/<zmw>/ccs! Instead saw: {0}".format(k))
-        zmw = m.group(1)
-        flnc_fastq_d.d[zmw] = flnc_fastq_d.d[k]
+        if m is not None:
+            zmw = m.group(1)
+            flnc_fafq_d.d[zmw] = flnc_fafq_d.d[k]
+        else:
+            zmw = k
         rich_zmws.add(zmw)
 
-    return flnc_fastq_d, rich_zmws
+    return flnc_fafq_d, rich_zmws
 
 
 def read_read_stat(stat_filename, rich_zmws):
@@ -70,12 +69,10 @@ def read_read_stat(stat_filename, rich_zmws):
                raise Exception("Expected PBID format PB.X.Y but saw {0}".format(r['pbid']))
            locus = m.group(1) # ex: PB.1
            m = rex_flnc.match(r['id'])
-           if m is None:
-               m = rex_flnc2.match(r['id'])
-               if m is None:
-                   m = rex_flnc3.match(r['id'])
-                   if m is None: raise Exception("Expected FLNC id format is <movie>/<zmw>/ccs! Instead saw: {0}".format(r['id']))
-           zmw = m.group(1)
+           if m is not None:
+               zmw = m.group(1)
+           else:
+               zmw = r['id']
            if zmw in rich_zmws:
                tally_by_loci[locus].append((r['pbid'], zmw))
            else:
@@ -109,6 +106,7 @@ def read_GFF(gff_filename, logf):
             tmp[locus].append(r)
 
 
+    #pdb.set_trace()
     # now figure out the exonic regions for each gene PB.X
     for locus, records in tmp.items():
         c = ClusterTree(0, 0)
@@ -157,7 +155,7 @@ def select_loci_to_phase(args, genome_dict):
 
     logf = open('warning.logs', 'w')
     print("Reading FLNC file...", file=sys.stderr)
-    flnc_fastq_d, rich_zmws = read_flnc_fastq(args.flnc_filename)
+    flnc_fafq_d, rich_zmws = read_flnc_fafq(args.flnc_filename, 'fastq' if args.fq else 'fasta')
 
     print("Reading read_stat....", file=sys.stderr)
     tally_by_loci, poor_zmws_not_in_rich = read_read_stat(args.stat_filename, rich_zmws)
@@ -167,6 +165,7 @@ def select_loci_to_phase(args, genome_dict):
 
     # find all gene loci that has at least X FLNC coverage
     cand_loci = [k for k in tally_by_loci if len(tally_by_loci[k]) >= args.coverage]
+    #pdb.set_trace()
     print("Total {0} loci read. {1} has >= {2} coverage.".format(\
         len(tally_by_loci), len(cand_loci), args.coverage), file=sys.stderr)
     for locus in cand_loci:
@@ -203,8 +202,12 @@ def select_loci_to_phase(args, genome_dict):
         f2 = open(os.path.join(d2, 'ccs.fasta'), 'w')
         h = open(os.path.join(d2, 'fake.read_stat.txt'), 'w')
         h.write("id\tlength\tis_fl\tstat\tpbid\n")
+        zmws_seen = set()
         for pbid, zmw in tally_by_loci[locus]:
-            rec = flnc_fastq_d[zmw]
+            if zmw in zmws_seen: continue # duplicates can occassionally happen w split mapping
+            zmws_seen.add(zmw)
+            rec = flnc_fafq_d[zmw]
+            if not args.fq: rec.letter_annotations['phred_quality'] = [60]*len(rec.seq) # manually addin QVs
             SeqIO.write(rec, f1, 'fastq')
             SeqIO.write(rec, f2, 'fasta')
             h.write("{0}\t{1}\tY\tunique\t{2}\n".format(zmw, len(rec.seq), pbid))
@@ -218,10 +221,11 @@ def getargs():
 
     parser = ArgumentParser()
     parser.add_argument("genome_fasta", help="Reference genome fasta")
-    parser.add_argument("flnc_filename", help="FLNC fastq file")
+    parser.add_argument("flnc_filename", help="FLNC fasta/fastq file (if fastq, run with --fq)")
     parser.add_argument("gff_filename", help="GFF file of transcripts, IDs must be PB.X.Y")
     parser.add_argument("stat_filename", help="Tab-delimited read stat file linking FLNC to PB.X.Y")
     parser.add_argument("-c", "--coverage", type=int, default=40, help="Minimum FLNC coverage required (default: 40)")
+    parser.add_argument("--fq", default=False, action="store_true", help="Use if flnc is fastq instead of fasta")
 
     return parser
 

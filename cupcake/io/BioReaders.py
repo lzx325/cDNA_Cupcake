@@ -5,6 +5,7 @@ Duplicated here for tofu installation. This one is called via cupcake.io.BioRead
 
 import re, sys, pdb
 from collections import namedtuple
+import pysam
 
 Interval = namedtuple('Interval', ['start', 'end'])
                                  
@@ -209,6 +210,9 @@ class SAMRecord:
                self.sLen == other.sLen and self.qStart == other.qStart and\
                self.cigar == other.cigar and self.flag == other.flag and self.identity == other.identity
 
+    @property
+    def ref_exons(self):
+        return self.segments
 
     def process(self, record_line, ref_len_dict, query_len_dict):
         """
@@ -440,3 +444,105 @@ class GMAPSAMRecord(SAMRecord):
             except KeyError: # HACK for blasr's extended qID
                 raise Exception("Unable to find qID {0} in the input fasta/fastq!".format(self.qID))
             self.qCoverage = (self.qEnd - self.qStart) * 1. / self.qLen
+
+
+class SplicedBAMReader:
+    """
+    The SplicedBAMReader imitates the behavior of GMAPSAMReader,
+    basically accepted an aligned BAM file instead of aligned SAM file
+    The returned records will have the same format as GMAPSAMRecord
+    """
+
+    def __init__(self, filename, ref_len_dict=None, query_len_dict=None):
+        self.filename = filename
+        self.reader = pysam.AlignmentFile(open(filename), 'rb', check_sq=False)
+        self.ref_len_dict = ref_len_dict
+        self.query_len_dict = query_len_dict
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return self.grab_next_record()
+
+    def grab_next_record(self):
+        try:
+            r = next(self.reader)
+            samrec = SAMRecord(None) # we initiate the record and fill it in manually
+
+            samrec.qID = r.qname
+            samrec.qStart = r.qstart
+            samrec.qEnd = r.qend
+            if self.query_len_dict is not None:
+                samrec.qLen = self.query_len_dict[samrec.qID]
+            else:
+                samrec.qLen = r.qlen
+            samrec.sID = '*' if r.is_unmapped else r.reference_name
+            samrec.sStart = r.reference_start
+            samrec.sEnd = r.reference_end
+            if self.ref_len_dict is not None:
+                samrec.sLen = self.ref_len_dict[samrec.sID]
+            else:
+                samrec.sLen = r.reference_length
+            samrec.cigar = r.cigarstring
+            samrec.record_line = r.tostring()
+            if samrec.sID == '*': # unmapped, nothing to parse
+                return samrec
+
+            # calling parse_cigar also sets num_ins, num_del, num_mat_or_sub, cigar_qlen
+            samrec.segments = samrec.parse_cigar(r.cigarstring, r.reference_start)
+            samrec.flag = SAMRecord.parse_sam_flag(r.flag)
+
+            tag_d = dict(r.tags)
+            if 'NM' in tag_d:   # this is used by regular minimap2
+                samrec.num_nonmatches = tag_d['NM']
+                samrec.identity = 1 - (samrec.num_nonmatches / samrec.qLen)
+            else: # parse the cigar tuple to get the number of mismatches/insertions/deletions
+                # https://pysam.readthedocs.io/en/latest/api.html#pysam.AlignedSegment.cigartuples
+                # NOTE: we rely on this being run with mismatches represented by X
+                samrec.num_nonmatches = 0
+                for cigartype,cigarcount in r.cigartuples:
+                    # 1:I, 2:D, 8:X
+                    if cigartype in [1, 2, 8]:
+                        samrec.num_nonmatches += cigarcount
+                samrec.identity = 1 - (samrec.num_nonmatches / samrec.qLen)
+
+            samrec.qCoverage = (r.qend-r.qstart)/samrec.qLen
+            samrec.sCoverage = (r.reference_end-r.reference_start)/samrec.sLen
+            return samrec
+        except StopIteration:
+            raise StopIteration
+
+
+class SplicedBAMReaderRegioned(SplicedBAMReader):
+    """
+    Extension of SpliceBAMReader, except that an upfront [start_index, end_index) is defined,
+    so that it'll return the records within that region
+
+    The returned records will have the same format as GMAPSAMRecord
+    """
+    def __init__(self, filename, start_index, end_index, ref_len_dict=None, query_len_dict=None):
+        self.filename = filename
+        self.reader = pysam.AlignmentFile(open(filename), 'rb', check_sq=False)
+        self.ref_len_dict = ref_len_dict
+        self.query_len_dict = query_len_dict
+        self.start_index = start_index
+        self.end_index = end_index
+        self.cur_index = start_index
+
+        if self.start_index is None or self.end_index is None or self.start_index >= self.end_index:
+            raise Exception(f"SplicedBAMReaderRegioned must be given proper integer [start_index, end_index)! Instead got {start_index}, {end_index}")
+
+        for i in range(self.start_index):
+            r = next(self.reader)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self.cur_index += 1
+        if self.cur_index > self.end_index:
+            raise StopIteration
+        return self.grab_next_record()
+
+
