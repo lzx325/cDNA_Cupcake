@@ -4,3 +4,6 @@
 
 build/*
 cupcake/tofu/branch/*
+dist/
+cupcake.egg-info/
+cupcake/ice/find_ECE.c
