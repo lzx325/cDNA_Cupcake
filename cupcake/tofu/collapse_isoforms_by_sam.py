@@ -63,7 +63,7 @@ def pick_rep(fa_fq_filename, gff_filename, group_filename, output_filename, is_f
             
     for line in open(group_filename):
         pb_id, members = line.strip().split('\t')
-        print("Picking representative sequence for {0}".format(pb_id), file=sys.stdout)
+        print("Picking representative sequence for {0}".format(pb_id), file=sys.stderr)
         best_rec = None
         #best_id = None
         #best_seq = None
@@ -304,7 +304,7 @@ def main(args):
         f_bad = f_good
         cov_threshold = 1
     f_txt = open(args.prefix + '.collapsed.group.txt', 'w')
-
+    print("start merging",file=sys.stderr)
     if args.cpus == 1:
         b = branch_simple2.BranchSimple(args.input, cov_threshold=cov_threshold, min_aln_coverage=args.min_aln_coverage,
                                         min_aln_identity=args.min_aln_identity, is_fq=args.fq,
@@ -366,6 +366,7 @@ def main(args):
     f_good.close()
     f_bad.close()
     f_txt.close()
+    print("start fuzzy",file=sys.stderr)
 
     if args.max_fuzzy_junction > 0: # need to further collapse those that have fuzzy junctions!
         collapse_fuzzy_junctions(f_good.name, f_txt.name, args.allow_extra_5exon, internal_fuzzy_max_dist=args.max_fuzzy_junction)
@@ -410,8 +411,8 @@ def main(args):
                 f.write("{0}\t{1}\n".format(pbid, members.count(',')+1))
 
 
-    print("Ignored IDs written to: {0}".format(ignored_fout.name), file=sys.stdout)
-    print("Output written to: {0}\n{1}\n{2}\n{3}\n".format(f_good.name, f_txt.name, outfile, args), file=sys.stdout)
+    print("Ignored IDs written to: {0}".format(ignored_fout.name), file=sys.stderr)
+    print("Output written to: {0}\n{1}\n{2}\n{3}\n".format(f_good.name, f_txt.name, outfile, args), file=sys.stderr)
 
 if __name__ == "__main__":
     from argparse import ArgumentParser

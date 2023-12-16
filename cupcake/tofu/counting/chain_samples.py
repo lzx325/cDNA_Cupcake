@@ -523,7 +523,6 @@ if __name__ == "__main__":
     parser.add_argument("--max_3_diff", type=int, default=30, help="Maximum 3' difference allowed (default: 30bp)")
     parser.add_argument("--cpus", type=int, default=8, help="Number of CPUs to use for multi-threading (default: 8)")
     args = parser.parse_args()
-
     sample_dirs, sample_names, group_filename, gff_filename, count_filename, fastq_filename = read_config(args.config_file)
     chain_samples_multithread(sample_dirs, sample_names, group_filename, gff_filename, count_filename, args.field_to_use, args.fuzzy_junction, args.allow_5merge, args.max_3_diff, fastq_filename, cpus=args.cpus)
 

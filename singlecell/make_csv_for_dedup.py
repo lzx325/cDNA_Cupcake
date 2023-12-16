@@ -9,12 +9,17 @@ import os, re
 from Bio import SeqIO
 from Bio.Seq import Seq
 import sys
+from pathlib import Path
 
 rex = re.compile('(\S+) full_length_coverage=(\d+);length=(\d+);XM=(\S+);XC=(\S+)')
 rex_umi_only = re.compile('(\S+) full_length_coverage=(\d+);length=(\d+);XM=(\S+)')
-sample_name=sys.argv[1]
-reader = SeqIO.parse(open('%s.dedup.fasta'%(sample_name)),'fasta')
-f = open('%s.dedup.info.csv'%(sample_name), 'w')
+input_fp=sys.argv[1]
+input_path=Path(input_fp)
+sample_name=re.sub(r"\..*","",input_path.stem)
+out_dir=input_path.parent
+out_fp=os.path.join(out_dir,f"{sample_name}.dedup.info.csv")
+reader = SeqIO.parse(open(input_fp),'fasta')
+f = open(out_fp, 'w')
 f.write("id\tUMI\tUMIrev\tBC\tBCrev\tlength\tcount\n")
 for r in reader:
     m = rex.match(r.description)

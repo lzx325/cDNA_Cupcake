@@ -243,6 +243,7 @@ def find_fusion_candidates(sam_filename, query_len_dict, min_locus_coverage=.05,
         else:
             d[r.qID].append(TmpRec(qCov=r.qCoverage, qLen=r.qLen, qStart=r.qLen-r.qEnd, qEnd=r.qLen-r.qStart, sStart=r.sStart, sEnd=r.sEnd, iden=r.identity, chrom=r.sID))
     fusion_candidates = {}
+    d2 = {k:data for k,data in d.items() if len(data)>1 }
     for k, data in d.items():
         if len(data) > 1 and \
             all(a.iden>=min_identity for a in data) and \
