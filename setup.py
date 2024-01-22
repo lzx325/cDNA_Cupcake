@@ -38,7 +38,7 @@ setup(
         'bx-python>=0.7.3',
         'numpy',
         'bcbio-gff',
-        'sklearn',
+        'scikit-learn',
         'pysam'
         ],
     scripts = ['cupcake/tofu/collapse_isoforms_by_sam.py',
